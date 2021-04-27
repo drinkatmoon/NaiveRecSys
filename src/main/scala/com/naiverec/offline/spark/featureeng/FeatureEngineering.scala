@@ -1,7 +1,8 @@
-package com.naiverec.featureeng
+package com.naiverec.offline.spark.featureeng
 
 import org.apache.log4j.{Level, Logger}
-import org.apache.spark.ml.feature.{OneHotEncoderEstimator, StringIndexer}
+import org.apache.spark.ml.Pipeline
+import org.apache.spark.ml.feature.{MinMaxScaler, OneHotEncoderEstimator, QuantileDiscretizer, StringIndexer}
 import org.apache.spark.ml.linalg.Vectors
 import org.apache.spark.{SparkConf, sql}
 import org.apache.spark.sql.expressions.UserDefinedFunction
@@ -78,12 +79,23 @@ object FeatureEngineering {
       .withColumn("avgRatingVec", double2vec(col(("avgRating"))))
     movieFeatures.show()
     //分桶处理，创建QuantileDiscretizer进行分桶，将打分次数这一特征分到100个桶中
-
+    //QuantileDiscretizer使用分位数法，将对应区间的特征值转成对应的bucket编号
+    //具体参考：https://blog.csdn.net/YE1215172385/article/details/107167886
+    val ratingCountDiscretizer = new QuantileDiscretizer()
+      .setInputCol("ratingCount")
+      .setOutputCol("ratingCountBucket")
+      .setNumBuckets(100)
     //归一化处理，创建MinMaxScaler进行归一化，将平均得分进行归一化
-
+    //MinMaxScaler的理解参考：https://blog.csdn.net/wangpei1949/article/details/53148178
+    val ratingScaler = new MinMaxScaler()
+      .setInputCol("avgRatingVec")
+      .setOutputCol("scaleAvgRating")
     //创建一个pipeline，依次执行两个特征处理过程
-
+    val pipelineStage = Array(ratingCountDiscretizer, ratingScaler)
+    val featurePipeline = new Pipeline().setStages(pipelineStage)
+    val movieProcessedFeatures = featurePipeline.fit(movieFeatures).transform(movieFeatures)
     //打印最终结果
+    movieProcessedFeatures.show()
   }
 
   def main(args: Array[String]): Unit = {
@@ -100,11 +112,11 @@ object FeatureEngineering {
     movieSamples.show(20)
     //对类别型数据进行独热编码
     println("OneHotEncoder Example:")
-    oneHotEncoderExample(movieSamples)
+//    oneHotEncoderExample(movieSamples)
 
     //对含多值的类别型数据，如标签进行多热编码
     println("MultiHotEncoder Example:")
-    multiHotEncoderExample(movieSamples)
+//    multiHotEncoderExample(movieSamples)
 
     println("Numberical features Example:")
     val ratingResourcePath = this.getClass.getResource("/webroot/sampledata/ratings.csv")
