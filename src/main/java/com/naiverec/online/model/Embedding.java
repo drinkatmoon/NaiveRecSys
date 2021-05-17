@@ -30,6 +30,7 @@ public class Embedding {
     }
 
     //calculate cosine similarity between two embeddings
+    //余弦相似度计算公式：A B向量的点击/A的模*B向量的模
     public double calculateSimilarity(Embedding otherEmb){
         if (null == embVector || null == otherEmb || null == otherEmb.getEmbVector()
                 || embVector.size() != otherEmb.getEmbVector().size()){

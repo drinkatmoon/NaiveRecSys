@@ -5,6 +5,8 @@ import java.io.{BufferedWriter, File, FileWriter}
 
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.SparkConf
+import org.apache.spark.ml.feature.BucketedRandomProjectionLSH
+import org.apache.spark.ml.linalg.Vectors
 import org.apache.spark.mllib.feature.Word2Vec
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{Row, SparkSession}
@@ -15,7 +17,7 @@ import redis.clients.jedis.params.SetParams
 
 import scala.collection.mutable
 import scala.util.Random
-import scala.util.control.Breaks.{break,breakable}
+import scala.util.control.Breaks.{break, breakable}
 
 object Embedding {
 
@@ -48,6 +50,34 @@ object Embedding {
     value
   }
 
+  /**
+   * 使用局部敏感哈希算法对电影进行分桶
+   * @param spark
+   * @param movieEmbMap
+   */
+  def embeddingLSH(spark: SparkSession, movieEmbMap: Map[String, Array[Float]]): Unit = {
+    val movieEmbSeq = movieEmbMap.toSeq.map(item => (item._1, Vectors.dense(item._2.map(f => f.toDouble))))
+    val movieEmbDF = spark.createDataFrame(movieEmbSeq).toDF("movieId", "emb")
+    //定义LSH(locality sensitive hashing)局部敏感哈希模型
+    val bucketProjectionLSH = new BucketedRandomProjectionLSH()
+      .setBucketLength(0.1) //设置分桶宽度
+      .setNumHashTables(3) //指多桶策略中的分桶次数
+      .setInputCol("emb")
+      .setOutputCol("bucketId")
+    //训练LSH分桶模型
+    val bucketModel = bucketProjectionLSH.fit(movieEmbDF)
+    //进行分桶
+    val embBuketResult = bucketModel.transform(movieEmbDF)
+    println("movieId,emb,bucketId schema:")
+    embBuketResult.printSchema()
+    println("movieId,emb,bucketId data result:")
+    embBuketResult.show(10,false)
+
+    println("Approximately searching for 5 nearest neighbors of the sample embedding:")
+    val sampleEmb = Vectors.dense(0.795,0.583,1.120,0.850,0.174,-0.839,-0.0633,0.249,0.673,-0.237)
+    bucketModel.approxNearestNeighbors(movieEmbDF,sampleEmb,5).show( false)
+
+  }
 
   def trainItem2vec(spark: SparkSession, samples: RDD[Seq[String]], embLength: Int, embOutputFilename: String, saveToRedis: Boolean, redisKeyPrefix: String) = {
     //设置模型参数
@@ -86,6 +116,7 @@ object Embedding {
       }
       redisClient.close()
     }
+    embeddingLSH(spark,model.getVectors)
 
   }
 
