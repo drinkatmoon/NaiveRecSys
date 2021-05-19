@@ -1,15 +1,16 @@
 package com.naiverec.offline.spark.featureeng
 
 import org.apache.log4j.{Level, Logger}
-
 import org.apache.spark.SparkConf
 import org.apache.spark.sql.expressions.{UserDefinedFunction, Window}
 import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.IntegerType
+import redis.clients.jedis.Jedis
+import redis.clients.jedis.params.SetParams
 
 import scala.collection.immutable.ListMap
-import scala.collection.mutable
+import scala.collection.{JavaConversions, mutable}
 
 object FeatureEngForRecModel {
   val NUMBER_PRECISION = 2 //小数精度
@@ -127,11 +128,91 @@ object FeatureEngForRecModel {
 
   }
 
-  def extractAndSaveUserFeaturesToRedis(samplesWithUF: DataFrame): Unit = {
-    samplesWithUF
+  def extractAndSaveUserFeaturesToRedis(samplesWithUF: DataFrame): DataFrame = {
+    val userLatestSamples = samplesWithUF.withColumn("userRowNum", row_number().over(Window.partitionBy("userId").orderBy(col("timestamp").desc)))
+      .filter(col("userRowNum")===1)
+      .select("userId", "userRatedMovie1", "userRatedMovie2", "userRatedMovie3", "userRatedMovie4", "userRatedMovie5",
+        "userRatingCount", "userAvgReleaseYear", "userReleaseYearStddev", "userAvgRating", "userRatingStddev",
+        "userGenre1", "userGenre2", "userGenre3", "userGenre4", "userGenre5")
+      .na.fill("")
+    userLatestSamples.printSchema()
+    userLatestSamples.show(100, truncate = false)
+    val userFeaturePrefix = "uf:"
+    val redisClient = new Jedis("localhost", 6379)
+    val params = SetParams.setParams()
+    //set ttl to 24hs *30
+    params.ex(60 * 60 * 24 *30)
+    val sampleArray = userLatestSamples.collect()
+    val userCount = sampleArray.length
+    println("total user size:"+sampleArray.length)
+    var insertedUserNumber= 0;
+    for(sample <- sampleArray){
+      val userkey = userFeaturePrefix + sample.getAs[String]("userId")
+      val valueMap = mutable.Map[String,String]()
+      valueMap("userRatedMovie1") = sample.getAs[String]("userRatedMovie1")
+      valueMap("userRatedMovie2") = sample.getAs[String]("userRatedMovie2")
+      valueMap("userRatedMovie3") = sample.getAs[String]("userRatedMovie3")
+      valueMap("userRatedMovie4") = sample.getAs[String]("userRatedMovie4")
+      valueMap("userRatedMovie5") = sample.getAs[String]("userRatedMovie5")
+      valueMap("userGenre1") = sample.getAs[String]("userGenre1")
+      valueMap("userGenre2") = sample.getAs[String]("userGenre2")
+      valueMap("userGenre3") = sample.getAs[String]("userGenre3")
+      valueMap("userGenre4") = sample.getAs[String]("userGenre4")
+      valueMap("userGenre5") = sample.getAs[String]("userGenre5")
+      valueMap("userRatingCount") = sample.getAs[Long]("userRatingCount").toString
+      valueMap("userAvgReleaseYear") = sample.getAs[Int]("userAvgReleaseYear").toString
+      valueMap("userReleaseYearStddev") = sample.getAs[String]("userReleaseYearStddev")
+      valueMap("userAvgRating") = sample.getAs[String]("userAvgRating")
+      valueMap("userRatingStddev") = sample.getAs[String]("userRatingStddev")
+
+      redisClient.hset(userkey,JavaConversions.mapAsJavaMap(valueMap))
+      insertedUserNumber+=1
+      if(insertedUserNumber % 100 == 0){
+        println(insertedUserNumber + "/"+userCount+"...")
+      }
+    }
+    redisClient.close()
+    userLatestSamples
   }
 
-  def extractAndSaveMovieFeaturesToRedis(samplesWithUserFeatures: DataFrame): Unit = {}
+  def extractAndSaveMovieFeaturesToRedis(samplesWithUF: DataFrame): DataFrame = {
+    val movieLatestSamples = samplesWithUF.withColumn("movieRowNum", row_number().over(Window.partitionBy("movieId")
+      .orderBy(col("timestamp").desc)))
+      .filter(col("movieRowNum") === 1)
+      .select("movieId", "releaseYear", "movieGenre1", "movieGenre2", "movieGenre3", "movieRatingCount",
+        "movieAvgRating", "movieRatingStddev").na.fill("")
+    movieLatestSamples.printSchema()
+    movieLatestSamples.show(100,truncate=false)
+    val movieFeaturePrefix = "mf:"
+
+    val redisClient = new Jedis("localhost",6379)
+    val params = SetParams.setParams()
+    //set ttl to 24hs * 30
+    params.ex(60*60*24*30)
+    val sampleArray = movieLatestSamples.collect()
+    println("total movie size:"+sampleArray.length)
+
+    var insertedMovieNumber = 0
+    val movieCount = sampleArray.length
+    for(sample <- sampleArray){
+      val movieKey = movieFeaturePrefix +sample.getAs[String]("movieId")
+      val valueMap = mutable.Map[String,String]()
+      valueMap("movieGenre1") = sample.getAs[String]("movieGenre1")
+      valueMap("movieGenre2") = sample.getAs[String]("movieGenre2")
+      valueMap("movieGenre3") = sample.getAs[String]("movieGenre3")
+      valueMap("movieRatingCount") = sample.getAs[Long]("movieRatingCount").toString
+      valueMap("releaseYear") = sample.getAs[Int]("releaseYear").toString
+      valueMap("movieAvgRating") = sample.getAs[String]("movieAvgRating")
+      valueMap("movieRatingStddev") = sample.getAs[String]("movieRatingStddev")
+      redisClient.hset(movieKey, JavaConversions.mapAsJavaMap(valueMap))
+      insertedMovieNumber += 1
+      if (insertedMovieNumber % 100 ==0){
+        println(insertedMovieNumber + "/" + movieCount + "...")
+      }
+    }
+    redisClient.close()
+    movieLatestSamples
+  }
 
   def main(args: Array[String]): Unit = {
     Logger.getLogger("org").setLevel(Level.WARN)
@@ -153,7 +234,7 @@ object FeatureEngForRecModel {
     val samplesWithMovieFeatures = addMovieFeatures(movieSamples, ratingSamplesWithLabel)
     val samplesWithUserFeatures = addUserFeatures(samplesWithMovieFeatures)
     //save samples as csv format:将训练样本保存为csv格式文件
-    splitAndSaveTrainingTestSamples(samplesWithUserFeatures, "/webroot/sampledata")
+//    splitAndSaveTrainingTestSamples(samplesWithUserFeatures, "/webroot/sampledata")
 
     //保存用户特征与物品特征到redis库以便线上使用
     extractAndSaveUserFeaturesToRedis(samplesWithUserFeatures)
