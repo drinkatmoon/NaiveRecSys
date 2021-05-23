@@ -2,9 +2,9 @@ import tensorflow as tf
 
 ##导入本地训练以及测试样本路径
 train_samples_file_path = tf.keras.utils.get_file("trainingSamples.csv",
-                                                  "file:///D:/workspaces/NaiveRecSys/src/main/resources/webroot/sampledata/trainingSamples.csv")
+                                                  "file:///E:/workspaces/NaiveRecSys/src/main/resources/webroot/sampledata/trainingSamples.csv")
 test_samples_file_path = tf.keras.utils.get_file("trainingSamples.csv",
-                                                  "file:///D:/workspaces/NaiveRecSys/src/main/resources/webroot/sampledata/testSamples.csv")
+                                                  "file:///E:/workspaces/NaiveRecSys/src/main/resources/webroot/sampledata/testSamples.csv")
 
 ##加载知道目录数据为tf dataset
 def get_dataset(file_path):
@@ -101,7 +101,7 @@ deep =tf.keras.layers.Dense(128,activation='relu')(deep)
 wide = tf.keras.layers.DenseFeatures(crossed_feature)(inputs)
 both = tf.keras.layers.concatenate([deep,wide])
 output_layer = tf.keras.layers.Dense(1,activation='sigmoid')(both)
-model = tf._keras.Model(inputs,output_layer)
+model = tf.keras.Model(inputs,output_layer)
 
 ##compile the model,set loss function,optimizer and evaluation metrics
 model.compile(
@@ -116,8 +116,12 @@ model.fit(train_dataset,epochs=5)
 test_loss,test_accuracy,test_roc_auc,test_pr_auc =model.evaluate(test_dataset)
 print('\n\nTest Loss {}, Test Accuracy {}, Test ROC AUC {}, Test PR AUC {}'.format(test_loss, test_accuracy,
                                                                                    test_roc_auc, test_pr_auc))
+#print some predict results
 predictions = model.predict(test_dataset)
-
+for prediction, goodRating in zip(predictions[:12], list(test_dataset)[0][1][:12]):
+    print("Predicted good rating: {:.2%}".format(prediction[0]),
+          " | Actual rating label: ",
+          ("Good Rating" if bool(goodRating) else "Bad Rating"))
 
 
 
